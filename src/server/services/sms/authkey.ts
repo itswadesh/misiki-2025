@@ -10,7 +10,7 @@ const objToQueryString = (params: any) => {
 export const authKeyMessage = async ({ phone, otp }: { phone: string; otp: string }) => {
   try {
     // Template with placeholders that will be replaced
-    const template = `<#> Hi, {#otp#} is your OTP to login to {#website#} `
+    const template = `<#> Hi, 5963 is your OTP to login to LRNR - BoBI72gsKkc`
 
     // Replace placeholders with actual values
     const msg = template.replace('{#otp#}', otp).replace('{#website#}', 'MISIKI')
