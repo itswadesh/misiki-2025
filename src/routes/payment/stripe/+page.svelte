@@ -4,20 +4,27 @@ import { goto } from '$app/navigation'
 import { loadStripe } from '@stripe/stripe-js'
 import { PUBLIC_STRIPE_PUBLISHABLE_KEY } from '$env/static/public'
 
-let planId = ''
-let totalAmount = 0
-let couponCode = ''
-let paymentMethod = 'card' // 'card' or 'billie'
+let planId = $state('')
+let totalAmount = $state(0)
+let couponCode = $state('')
+let paymentMethod = $state('billie') // 'card' or 'billie'
+
+const paymentElementClass = $derived(
+  paymentMethod === 'card' ? '' : 'opacity-0 pointer-events-none absolute'
+)
+const addressElementClass = $derived(
+  paymentMethod === 'billie' ? '' : 'opacity-0 pointer-events-none absolute'
+)
 
 let stripe: any = null
 let elements: any = null
 let paymentElement: any = null
 let addressElement: any = null
 
-let isLoading = false
-let error = ''
-let clientSecret = ''
-let orderId = ''
+let isLoading = $state(false)
+let error = $state('')
+let clientSecret = $state('')
+let orderId = $state('')
 
 async function initializePayment() {
   if (!stripe) {
@@ -182,8 +189,8 @@ async function handleSubmit() {
     </div>
 
     <!-- Stripe Elements -->
-    <div id="payment-element" class={paymentMethod === 'card' ? '' : 'hidden'}></div>
-    <div id="address-element" class={paymentMethod === 'billie' ? '' : 'hidden'}></div>
+    <div id="payment-element" class={paymentElementClass}></div>
+    <div id="address-element" class={addressElementClass}></div>
 
     <div class="bg-gray-50 p-4 rounded-md">
       <p class="text-sm text-gray-600">
