@@ -3,6 +3,7 @@ import { and, eq, inArray } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { nanoid } from 'nanoid'
 import { z } from 'zod'
+import Stripe from 'stripe'
 import { db } from '../../db'
 import { Order, OrderItem, Product, Payment, User } from '../../db/schema' // Coupon schema might be needed if validateCouponUtil returns full Coupon object
 import { afterOrderConfirmation, placeOrder } from './utils' // Assuming placeOrder is in utils
@@ -10,6 +11,8 @@ import { capturePhonepe } from './phonepe/capture'
 import { phonepeCheckout } from './phonepe/checkout'
 import { validateCoupon as validateCouponUtil } from './validate-coupon'
 import { authenticate } from '@/server/middlewares'
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)
 
 // Create a checkout router
 export const checkoutRoutes = new Hono()
@@ -25,6 +28,28 @@ const phonepeCheckoutSchema = z.object({
 
 // Validator middleware
 const validatePhonepeCheckout = zValidator('json', phonepeCheckoutSchema)
+
+// Validation schema for Stripe Billie checkout
+const stripeBillieCheckoutSchema = z.object({
+  plan_id: z.string().min(1, 'Plan ID is required'),
+  total_amount: z.number().min(1, 'Amount must be at least 1'),
+  couponCode: z.string().optional(),
+  billing_details: z.object({
+    name: z.string().min(1, 'Name is required'),
+    email: z.string().email('Valid email is required'),
+    address: z.object({
+      line1: z.string().min(1, 'Address line 1 is required'),
+      line2: z.string().optional(),
+      city: z.string().min(1, 'City is required'),
+      state: z.string().min(1, 'State is required'),
+      postal_code: z.string().min(1, 'Postal code is required'),
+      country: z.string().min(2, 'Country is required').max(2, 'Country must be 2 letters'),
+    }),
+  }),
+})
+
+// Validator middleware
+const validateStripeBillieCheckout = zValidator('json', stripeBillieCheckoutSchema)
 
 // Format phone number
 function parsePhoneNumber(phone: string): string {
@@ -299,6 +324,100 @@ checkoutRoutes.post('/checkout/razorpay-capture', async (c) => {
       }
     }
     return c.json({ error: error.message || 'Razorpay capture failed' }, error.status || 500)
+  }
+})
+
+// Stripe Billie checkout
+checkoutRoutes.post('/checkout/stripe-billie', validateStripeBillieCheckout, async (c) => {
+  try {
+    const { plan_id, total_amount, couponCode, billing_details } = await c.req.json()
+    let finalAmount = total_amount
+    if (couponCode && plan_id) {
+      try {
+        const couponData = await validateCouponUtil({ couponCode, planId: plan_id })
+        finalAmount = couponData.finalPrice
+      } catch (couponError: any) {
+        console.warn(`Coupon ${couponCode} validation failed: ${couponError.message}`)
+      }
+    }
+
+    const newOrder = await placeOrder({
+      pgName: 'Stripe Billie',
+      totalAmount: finalAmount,
+      planId: plan_id,
+      phone: undefined, // Billie doesn't require phone
+      couponCode: couponCode,
+    })
+
+    // Create PaymentMethod for Billie
+    const paymentMethod = await stripe.paymentMethods.create({
+      type: 'billie',
+      billie: {
+        billing_details: {
+          name: billing_details.name,
+          email: billing_details.email,
+          address: {
+            line1: billing_details.address.line1,
+            line2: billing_details.address.line2 || undefined,
+            city: billing_details.address.city,
+            state: billing_details.address.state,
+            postal_code: billing_details.address.postal_code,
+            country: billing_details.address.country,
+          },
+        },
+      },
+    })
+
+    // Create PaymentIntent with the payment method
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: Math.round(finalAmount * 100), // Amount in cents
+      currency: 'eur', // Billie requires EUR
+      payment_method: paymentMethod.id,
+      confirm: true, // Confirm immediately
+      metadata: {
+        order_id: newOrder.id,
+        plan_id: newOrder.plan_id,
+      },
+    })
+
+    if (paymentIntent.status === 'succeeded') {
+      // Payment succeeded
+      const confirmedOrder = await afterOrderConfirmation({
+        order: newOrder,
+        amount_paid: finalAmount,
+        payment_status: 'PAID',
+        payment_reference_id: paymentIntent.id,
+        pg_name: 'Stripe Billie',
+        email: billing_details.email,
+      })
+
+      return c.json({
+        success: true,
+        order_no: confirmedOrder.id,
+        plan_id: confirmedOrder.planId,
+        message: 'Payment successful with Billie',
+      })
+    } else if (paymentIntent.status === 'requires_action') {
+      // Handle additional actions if needed
+      return c.json({
+        success: false,
+        error: 'Payment requires additional action',
+        payment_intent_client_secret: paymentIntent.client_secret,
+      })
+    } else {
+      // Payment failed
+      await afterOrderConfirmation({
+        order: newOrder,
+        amount_paid: 0,
+        payment_status: 'FAILED',
+        payment_reference_id: paymentIntent.id,
+        pg_name: 'Stripe Billie',
+      })
+      return c.json({ error: 'Payment failed', status: paymentIntent.status }, 400)
+    }
+  } catch (error: any) {
+    console.error('Stripe Billie checkout error:', error)
+    return c.json({ error: error.message || 'Stripe Billie checkout failed' }, error.status || 500)
   }
 })
 
