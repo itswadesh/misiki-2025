@@ -327,10 +327,10 @@ checkoutRoutes.post('/checkout/razorpay-capture', async (c) => {
   }
 })
 
-// Stripe Billie checkout
-checkoutRoutes.post('/checkout/stripe-billie', validateStripeBillieCheckout, async (c) => {
+// Stripe checkout - create PaymentIntent
+checkoutRoutes.post('/stripe-checkout', async (c) => {
   try {
-    const { plan_id, total_amount, couponCode, billing_details } = await c.req.json()
+    const { plan_id, total_amount, couponCode, payment_method_type } = await c.req.json()
     let finalAmount = total_amount
     if (couponCode && plan_id) {
       try {
@@ -341,73 +341,72 @@ checkoutRoutes.post('/checkout/stripe-billie', validateStripeBillieCheckout, asy
       }
     }
 
-    const newOrder = await placeOrder({
-      pgName: 'Stripe Billie',
-      totalAmount: finalAmount,
-      planId: plan_id,
-      phone: undefined, // Billie doesn't require phone
+    const newOrder = {
+      id: nanoid(),
+      plan_id: plan_id,
+      total_amount: 5000,
       couponCode: couponCode,
-    })
+    }
+    // const newOrder = await placeOrder({
+    //   pgName,
+    //   totalAmount: finalAmount,
+    //   planId: plan_id,
+    //   phone: undefined,
+    //   couponCode: couponCode,
+    // })
 
-    // Create PaymentMethod for Billie
-    const paymentMethod = await stripe.paymentMethods.create({
-      type: 'billie',
-      billie: {
-        billing_details: {
-          name: billing_details.name,
-          email: billing_details.email,
-          address: {
-            line1: billing_details.address.line1,
-            line2: billing_details.address.line2 || undefined,
-            city: billing_details.address.city,
-            state: billing_details.address.state,
-            postal_code: billing_details.address.postal_code,
-            country: billing_details.address.country,
-          },
-        },
-      },
-    })
-
-    // Create PaymentIntent with the payment method
+    // Create PaymentIntent
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(finalAmount * 100), // Amount in cents
-      currency: 'eur', // Billie requires EUR
-      payment_method: paymentMethod.id,
-      confirm: true, // Confirm immediately
+      amount: Math.round(50 * 100), // Amount in cents
+      currency: payment_method_type === 'billie' ? 'gbp' : 'usd', // Billie requires EUR, card can be USD
+      payment_method_types: [payment_method_type],
       metadata: {
         order_id: newOrder.id,
         plan_id: newOrder.plan_id,
       },
     })
 
+    return c.json({
+      client_secret: paymentIntent.client_secret,
+      order_id: newOrder.id,
+    })
+  } catch (error: any) {
+    console.error('Stripe checkout error:', error)
+    return c.json({ error: error.message || 'Stripe checkout failed' }, error.status || 500)
+  }
+})
+
+// Stripe confirm payment
+checkoutRoutes.post('/stripe-confirm', async (c) => {
+  try {
+    const { payment_intent_id, order_id } = await c.req.json()
+
+    const order = await db.query.Order.findFirst({
+      where: eq(Order.id, order_id),
+    })
+    if (!order) return c.json({ error: 'Order not found' }, 404)
+
+    const paymentIntent = await stripe.paymentIntents.retrieve(payment_intent_id)
+
     if (paymentIntent.status === 'succeeded') {
       // Payment succeeded
       const confirmedOrder = await afterOrderConfirmation({
-        order: newOrder,
-        amount_paid: finalAmount,
+        order,
+        amount_paid: paymentIntent.amount / 100,
         payment_status: 'PAID',
         payment_reference_id: paymentIntent.id,
         pg_name: 'Stripe Billie',
-        email: billing_details.email,
       })
 
       return c.json({
         success: true,
         order_no: confirmedOrder.id,
-        plan_id: confirmedOrder.planId,
         message: 'Payment successful with Billie',
-      })
-    } else if (paymentIntent.status === 'requires_action') {
-      // Handle additional actions if needed
-      return c.json({
-        success: false,
-        error: 'Payment requires additional action',
-        payment_intent_client_secret: paymentIntent.client_secret,
       })
     } else {
       // Payment failed
       await afterOrderConfirmation({
-        order: newOrder,
+        order,
         amount_paid: 0,
         payment_status: 'FAILED',
         payment_reference_id: paymentIntent.id,
@@ -416,8 +415,8 @@ checkoutRoutes.post('/checkout/stripe-billie', validateStripeBillieCheckout, asy
       return c.json({ error: 'Payment failed', status: paymentIntent.status }, 400)
     }
   } catch (error: any) {
-    console.error('Stripe Billie checkout error:', error)
-    return c.json({ error: error.message || 'Stripe Billie checkout failed' }, error.status || 500)
+    console.error('Stripe Billie confirm error:', error)
+    return c.json({ error: error.message || 'Stripe Billie confirm failed' }, error.status || 500)
   }
 })
 

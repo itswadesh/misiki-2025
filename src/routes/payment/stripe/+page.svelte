@@ -1,79 +1,164 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
+import { onMount, tick } from 'svelte'
+import { goto } from '$app/navigation'
+import { loadStripe } from '@stripe/stripe-js'
+import { PUBLIC_STRIPE_PUBLISHABLE_KEY } from '$env/static/public'
 
-  let planId = '';
-  let totalAmount = 0;
-  let couponCode = '';
+let planId = ''
+let totalAmount = 0
+let couponCode = ''
+let paymentMethod = 'card' // 'card' or 'billie'
 
-  let billingDetails = {
-    name: '',
-    email: '',
-    address: {
-      line1: '',
-      line2: '',
-      city: '',
-      state: '',
-      postal_code: '',
-      country: 'DE' // Default to Germany for Billie
+let stripe: any = null
+let elements: any = null
+let paymentElement: any = null
+let addressElement: any = null
+
+let isLoading = false
+let error = ''
+let clientSecret = ''
+let orderId = ''
+
+async function initializePayment() {
+  if (!stripe) {
+    stripe = await loadStripe(PUBLIC_STRIPE_PUBLISHABLE_KEY)
+  }
+
+  // Create PaymentIntent
+  try {
+    const response = await fetch('/api/checkout/stripe-checkout', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        plan_id: planId,
+        total_amount: totalAmount,
+        couponCode: couponCode || undefined,
+        payment_method_type: paymentMethod,
+      }),
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json()
+      throw new Error(errorData.error || 'Failed to create payment intent')
     }
-  };
 
-  let isLoading = false;
-  let error = '';
+    const result = await response.json()
+    clientSecret = result.client_secret
+    orderId = result.order_id
 
-  onMount(() => {
-    const urlParams = new URLSearchParams($page.url.search);
-    planId = urlParams.get('plan_id') || '';
-    totalAmount = parseFloat(urlParams.get('total_amount') || '0');
-    couponCode = urlParams.get('coupon') || '';
-  });
-
-  async function handleSubmit() {
-    if (!billingDetails.name || !billingDetails.email || !billingDetails.address.line1 ||
-        !billingDetails.address.city || !billingDetails.address.state ||
-        !billingDetails.address.postal_code || !billingDetails.address.country) {
-      error = 'Please fill in all required fields';
-      return;
+    if (!clientSecret) {
+      throw new Error('No client secret received')
     }
 
-    isLoading = true;
-    error = '';
+    // Create Elements
+    elements = stripe.elements({
+      clientSecret,
+      appearance: {
+        theme: 'stripe',
+      },
+    })
 
-    try {
-      const response = await fetch('/api/checkout/stripe-billie', {
+    // Clear previous elements
+    if (paymentElement) {
+      paymentElement.unmount()
+      paymentElement = null
+    }
+    if (addressElement) {
+      addressElement.unmount()
+      addressElement = null
+    }
+
+    // Create appropriate element based on payment method
+    if (paymentMethod === 'card') {
+      paymentElement = elements.create('payment')
+      await tick()
+      paymentElement.mount('#payment-element')
+    } else if (paymentMethod === 'billie') {
+      addressElement = elements.create('address', {
+        mode: 'billing',
+        allowedCountries: ['DE', 'AT', 'CH'],
+        defaultValues: {
+          address: {
+            country: 'DE',
+          },
+        },
+      })
+      await tick()
+      addressElement.mount('#address-element')
+    }
+  } catch (err) {
+    error = 'Failed to initialize payment'
+    console.error(err)
+  }
+}
+
+onMount(async () => {
+  const urlParams = new URLSearchParams(window.location.search)
+  planId = urlParams.get('plan_id') || ''
+  totalAmount = parseFloat(urlParams.get('total_amount') || '0')
+  couponCode = urlParams.get('coupon') || ''
+
+  await initializePayment()
+})
+
+function handlePaymentMethodChange() {
+  initializePayment()
+}
+
+async function handleSubmit() {
+  if (!stripe || !elements) {
+    error = 'Payment system not initialized'
+    return
+  }
+
+  isLoading = true
+  error = ''
+
+  try {
+    const { error: submitError } = await elements.submit()
+
+    if (submitError) {
+      error = submitError.message || 'Form submission failed'
+      return
+    }
+
+    const { error: confirmError } = await stripe.confirmPayment({
+      elements,
+      confirmParams: {
+        return_url: `${window.location.origin}/orders`,
+      },
+    })
+
+    if (confirmError) {
+      error = confirmError.message || 'Payment confirmation failed'
+    } else {
+      // Payment succeeded, confirm on server
+      await fetch('/api/checkout/stripe-confirm', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          plan_id: planId,
-          total_amount: totalAmount,
-          couponCode: couponCode || undefined,
-          billing_details: billingDetails,
+          payment_intent_id: clientSecret.split('_secret_')[0],
+          order_id: orderId,
         }),
-      });
+      })
 
-      const result = await response.json();
-
-      if (result.success) {
-        // Payment successful
-        goto('/orders'); // Or success page
-      } else {
-        error = result.error || 'Payment failed';
-      }
-    } catch (err) {
-      error = 'An error occurred during payment';
-      console.error(err);
-    } finally {
-      isLoading = false;
+      goto('/orders')
     }
+  } catch (err) {
+    error = 'An error occurred during payment'
+    console.error(err)
+  } finally {
+    isLoading = false
   }
+}
 </script>
 
 <div class="max-w-md mx-auto p-6 bg-white rounded-lg shadow-md">
-  <h1 class="text-2xl font-bold mb-6">Pay with Billie</h1>
+  <h1 class="text-2xl font-bold mb-6">Pay with Stripe</h1>
 
   {#if error}
     <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
@@ -82,104 +167,28 @@
   {/if}
 
   <form on:submit|preventDefault={handleSubmit} class="space-y-4">
+    <!-- Payment Method Selector -->
     <div>
-      <label for="name" class="block text-sm font-medium text-gray-700">Full Name *</label>
-      <input
-        type="text"
-        id="name"
-        bind:value={billingDetails.name}
-        required
-        class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-      />
+      <label for="payment-method" class="block text-sm font-medium text-gray-700 mb-2">Payment Method</label>
+      <select
+        id="payment-method"
+        bind:value={paymentMethod}
+        on:change={handlePaymentMethodChange}
+        class="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+      >
+        <option value="card">Credit/Debit Card</option>
+        <option value="billie">Billie (Buy Now, Pay Later)</option>
+      </select>
     </div>
 
-    <div>
-      <label for="email" class="block text-sm font-medium text-gray-700">Email *</label>
-      <input
-        type="email"
-        id="email"
-        bind:value={billingDetails.email}
-        required
-        class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-      />
-    </div>
-
-    <div>
-      <label for="line1" class="block text-sm font-medium text-gray-700">Address Line 1 *</label>
-      <input
-        type="text"
-        id="line1"
-        bind:value={billingDetails.address.line1}
-        required
-        class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-      />
-    </div>
-
-    <div>
-      <label for="line2" class="block text-sm font-medium text-gray-700">Address Line 2</label>
-      <input
-        type="text"
-        id="line2"
-        bind:value={billingDetails.address.line2}
-        class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-      />
-    </div>
-
-    <div class="grid grid-cols-2 gap-4">
-      <div>
-        <label for="city" class="block text-sm font-medium text-gray-700">City *</label>
-        <input
-          type="text"
-          id="city"
-          bind:value={billingDetails.address.city}
-          required
-          class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-        />
-      </div>
-
-      <div>
-        <label for="state" class="block text-sm font-medium text-gray-700">State *</label>
-        <input
-          type="text"
-          id="state"
-          bind:value={billingDetails.address.state}
-          required
-          class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-        />
-      </div>
-    </div>
-
-    <div class="grid grid-cols-2 gap-4">
-      <div>
-        <label for="postal_code" class="block text-sm font-medium text-gray-700">Postal Code *</label>
-        <input
-          type="text"
-          id="postal_code"
-          bind:value={billingDetails.address.postal_code}
-          required
-          class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-        />
-      </div>
-
-      <div>
-        <label for="country" class="block text-sm font-medium text-gray-700">Country *</label>
-        <select
-          id="country"
-          bind:value={billingDetails.address.country}
-          required
-          class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-        >
-          <option value="DE">Germany</option>
-          <option value="AT">Austria</option>
-          <option value="CH">Switzerland</option>
-        </select>
-      </div>
-    </div>
+    <!-- Stripe Elements -->
+    <div id="payment-element" class={paymentMethod === 'card' ? '' : 'hidden'}></div>
+    <div id="address-element" class={paymentMethod === 'billie' ? '' : 'hidden'}></div>
 
     <div class="bg-gray-50 p-4 rounded-md">
       <p class="text-sm text-gray-600">
         Plan: {planId}<br>
-        Amount: €{totalAmount.toFixed(2)}
+        Amount: {paymentMethod === 'billie' ? '€' : '$'}{totalAmount.toFixed(2)}
         {#if couponCode}
           <br>Coupon: {couponCode}
         {/if}
@@ -194,7 +203,7 @@
       {#if isLoading}
         Processing...
       {:else}
-        Pay with Billie
+        Pay {paymentMethod === 'card' ? 'with Card' : 'with Billie'}
       {/if}
     </button>
   </form>
