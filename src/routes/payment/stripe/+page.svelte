@@ -7,13 +7,13 @@ import { PUBLIC_STRIPE_PUBLISHABLE_KEY } from '$env/static/public'
 let planId = $state('')
 let totalAmount = $state(0)
 let couponCode = $state('')
-let paymentMethod = $state('billie') // 'card' or 'billie'
+let selectedPaymentMethod = $state('card')
 
 const paymentElementClass = $derived(
-  paymentMethod === 'card' ? '' : 'opacity-0 pointer-events-none absolute'
+  selectedPaymentMethod === 'card' ? '' : 'opacity-0 pointer-events-none absolute'
 )
 const addressElementClass = $derived(
-  paymentMethod === 'billie' ? '' : 'opacity-0 pointer-events-none absolute'
+  selectedPaymentMethod === 'billie' ? '' : 'opacity-0 pointer-events-none absolute'
 )
 
 let stripe: any = null
@@ -26,7 +26,7 @@ let error = $state('')
 let clientSecret = $state('')
 let orderId = $state('')
 
-async function initializePayment() {
+async function initializePayment(paymentMethod: string) {
   if (!stripe) {
     stripe = await loadStripe(PUBLIC_STRIPE_PUBLISHABLE_KEY)
   }
@@ -107,11 +107,11 @@ onMount(async () => {
   totalAmount = parseFloat(urlParams.get('total_amount') || '0')
   couponCode = urlParams.get('coupon') || ''
 
-  await initializePayment()
+  await initializePayment(selectedPaymentMethod)
 })
 
-function handlePaymentMethodChange() {
-  initializePayment()
+function handleTabChange() {
+  initializePayment(selectedPaymentMethod)
 }
 
 async function handleSubmit() {
@@ -173,45 +173,44 @@ async function handleSubmit() {
     </div>
   {/if}
 
-  <form on:submit|preventDefault={handleSubmit} class="space-y-4">
-    <!-- Payment Method Selector -->
-    <div>
-      <label for="payment-method" class="block text-sm font-medium text-gray-700 mb-2">Payment Method</label>
-      <select
-        id="payment-method"
-        bind:value={paymentMethod}
-        on:change={handlePaymentMethodChange}
-        class="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-      >
-        <option value="card">Credit/Debit Card</option>
-        <option value="billie">Billie (Buy Now, Pay Later)</option>
-      </select>
-    </div>
-
-    <!-- Stripe Elements -->
-    <div id="payment-element" class={paymentElementClass}></div>
-    <div id="address-element" class={addressElementClass}></div>
-
-    <div class="bg-gray-50 p-4 rounded-md">
-      <p class="text-sm text-gray-600">
-        Plan: {planId}<br>
-        Amount: {paymentMethod === 'billie' ? '€' : '$'}{totalAmount.toFixed(2)}
-        {#if couponCode}
-          <br>Coupon: {couponCode}
-        {/if}
-      </p>
-    </div>
-
+  <div class="flex border-b mb-4">
     <button
-      type="submit"
-      disabled={isLoading}
-      class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50"
+      class="px-4 py-2 text-sm font-medium {selectedPaymentMethod === 'card' ? 'border-b-2 border-blue-500 text-blue-600' : 'text-gray-500'}"
+      on:click={() => { selectedPaymentMethod = 'card'; handleTabChange(); }}
     >
-      {#if isLoading}
-        Processing...
-      {:else}
-        Pay {paymentMethod === 'card' ? 'with Card' : 'with Billie'}
-      {/if}
+      Credit/Debit Card
     </button>
-  </form>
+    <button
+      class="px-4 py-2 text-sm font-medium {selectedPaymentMethod === 'billie' ? 'border-b-2 border-blue-500 text-blue-600' : 'text-gray-500'}"
+      on:click={() => { selectedPaymentMethod = 'billie'; handleTabChange(); }}
+    >
+      Billie (Buy Now, Pay Later)
+    </button>
+  </div>
+
+  <!-- Stripe Elements -->
+  <div id="payment-element" class={paymentElementClass}></div>
+  <div id="address-element" class={addressElementClass}></div>
+
+  <div class="bg-gray-50 p-4 rounded-md">
+    <p class="text-sm text-gray-600">
+      Plan: {planId}<br>
+      Amount: ${totalAmount.toFixed(2)}
+      {#if couponCode}
+        <br>Coupon: {couponCode}
+      {/if}
+    </p>
+  </div>
+
+  <button
+    on:click={async () => await handleSubmit()}
+    disabled={isLoading}
+    class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50"
+  >
+    {#if isLoading}
+      Processing...
+    {:else}
+      Pay with {selectedPaymentMethod === 'card' ? 'Card' : 'Billie'}
+    {/if}
+  </button>
 </div>
