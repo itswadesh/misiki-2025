@@ -341,23 +341,17 @@ checkoutRoutes.post('/stripe-checkout', async (c) => {
       }
     }
 
-    const newOrder = {
-      id: nanoid(),
-      plan_id: plan_id,
-      total_amount: 5000,
+    const newOrder = await placeOrder({
+      pgName: 'Stripe',
+      totalAmount: finalAmount,
+      planId: plan_id,
+      phone: undefined,
       couponCode: couponCode,
-    }
-    // const newOrder = await placeOrder({
-    //   pgName,
-    //   totalAmount: finalAmount,
-    //   planId: plan_id,
-    //   phone: undefined,
-    //   couponCode: couponCode,
-    // })
+    })
 
     // Create PaymentIntent
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(50 * 100), // Amount in cents
+      amount: Math.round(finalAmount * 100), // Amount in cents
       currency: payment_method_type === 'billie' ? 'gbp' : 'usd', // Billie requires EUR, card can be USD
       payment_method_types: [payment_method_type],
       metadata: {
@@ -401,22 +395,110 @@ checkoutRoutes.post('/stripe-confirm', async (c) => {
       return c.json({
         success: true,
         order_no: confirmedOrder.id,
-        message: 'Payment successful with Billie',
+        message: 'Payment successful',
       })
-    } else {
-      // Payment failed
+    } else if (paymentIntent.status === 'requires_payment_method') {
+      // Payment failed - requires new payment method
       await afterOrderConfirmation({
         order,
         amount_paid: 0,
         payment_status: 'FAILED',
         payment_reference_id: paymentIntent.id,
-        pg_name: 'Stripe Billie',
+        pg_name: 'Stripe',
+      })
+      return c.json({ error: 'Payment failed - please try a different payment method', status: paymentIntent.status }, 400)
+    } else if (paymentIntent.status === 'requires_action') {
+      // Authentication required
+      return c.json({
+        requires_action: true,
+        payment_intent_client_secret: paymentIntent.client_secret,
+        status: paymentIntent.status
+      })
+    } else {
+      // Other failure
+      await afterOrderConfirmation({
+        order,
+        amount_paid: 0,
+        payment_status: 'FAILED',
+        payment_reference_id: paymentIntent.id,
+        pg_name: 'Stripe',
       })
       return c.json({ error: 'Payment failed', status: paymentIntent.status }, 400)
     }
   } catch (error: any) {
-    console.error('Stripe Billie confirm error:', error)
-    return c.json({ error: error.message || 'Stripe Billie confirm failed' }, error.status || 500)
+    console.error('Stripe confirm error:', error)
+    return c.json({ error: error.message || 'Stripe confirm failed' }, error.status || 500)
+  }
+})
+
+// Stripe webhook
+checkoutRoutes.post('/webhook/stripe', async (c) => {
+  const sig = c.req.header('stripe-signature')
+  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET
+
+  let event
+
+  try {
+    event = stripe.webhooks.constructEvent(await c.req.text(), sig!, endpointSecret!)
+  } catch (err: any) {
+    console.error('Webhook signature verification failed:', err.message)
+    return c.json({ error: 'Webhook signature verification failed' }, 400)
+  }
+
+  try {
+    if (event.type === 'payment_intent.succeeded') {
+      const paymentIntent = event.data.object
+      const orderId = paymentIntent.metadata.order_id
+
+      if (!orderId) {
+        console.error('No order_id in payment_intent metadata')
+        return c.json({ error: 'No order_id in metadata' }, 400)
+      }
+
+      const order = await db.query.Order.findFirst({
+        where: eq(Order.id, orderId),
+      })
+
+      if (!order) {
+        console.error(`Order ${orderId} not found`)
+        return c.json({ error: 'Order not found' }, 404)
+      }
+
+      // Fulfill the order
+      await afterOrderConfirmation({
+        order,
+        amount_paid: paymentIntent.amount / 100,
+        payment_status: 'PAID',
+        payment_reference_id: paymentIntent.id,
+        pg_name: 'Stripe',
+      })
+
+      console.log(`Order ${orderId} fulfilled via webhook`)
+    } else if (event.type === 'payment_intent.payment_failed') {
+      const paymentIntent = event.data.object
+      const orderId = paymentIntent.metadata.order_id
+
+      if (orderId) {
+        const order = await db.query.Order.findFirst({
+          where: eq(Order.id, orderId),
+        })
+
+        if (order) {
+          await afterOrderConfirmation({
+            order,
+            amount_paid: 0,
+            payment_status: 'FAILED',
+            payment_reference_id: paymentIntent.id,
+            pg_name: 'Stripe',
+          })
+        }
+      }
+    }
+
+    return c.json({ received: true })
+  } catch (error: any) {
+    console.error('Stripe webhook processing error:', error)
+    return c.json({ error: error.message || 'Webhook processing failed' }, 500)
   }
 })
 
