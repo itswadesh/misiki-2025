@@ -106,6 +106,7 @@ export const placeOrder = async ({
   couponCode,
   phone,
   userId,
+  paymentId,
 }: any) => {
   let discountedAmount = totalAmount
   if (couponCode) {
@@ -130,22 +131,15 @@ export const placeOrder = async ({
 
   const OrderValues = {
     id: orderId,
-    userId: 1,
-    planId: planId,
-    totalAmount: Math.round(discountedAmount * 100), // Convert to paise/cents
+    userId: userId,
+    hostId: userId, // For subscriptions, host is the user
+    orderNumber: orderNo,
     status: 'created',
+    totalAmount: discountedAmount.toFixed(2), // In dollars
     paymentStatus: 'pending',
-    pgName,
-    phone,
-    couponCode: couponCode,
-    isPaid: false,
-    amountPaid: 0,
-    orderNo: orderNo,
-    paymentOrderId: null,
-    paymentReferenceId: null,
+    paymentMethod: pgName,
     comment: null,
-    paymentRemark: null,
-    email: null,
+    paymentId: paymentId,
   }
   const plan = await db.query.Plan.findFirst({ where: eq(Plan.id, planId) })
   if (plan) OrderValues.validTo = new Date(now.getTime() + plan.validity * 24 * 60 * 60 * 1000)

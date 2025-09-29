@@ -4,19 +4,20 @@ import { goto } from '$app/navigation'
 import { loadStripe } from '@stripe/stripe-js'
 import { PUBLIC_STRIPE_PUBLISHABLE_KEY } from '$env/static/public'
 import { createEventDispatcher } from 'svelte'
+import { CreditCard, MoreHorizontal } from '@lucide/svelte'
 
 const dispatch = createEventDispatcher()
 
 let planId = $state('')
 let totalAmount = $state(0)
 let couponCode = $state('')
-let selectedPaymentMethod = $state('card')
+let selectedMethod = $state('card')
 
 const paymentElementClass = $derived(
-  selectedPaymentMethod === 'card' ? '' : 'opacity-0 pointer-events-none absolute'
+  selectedMethod === 'card' ? '' : 'opacity-0 pointer-events-none absolute'
 )
 const addressElementClass = $derived(
-  selectedPaymentMethod === 'billie' ? '' : 'opacity-0 pointer-events-none absolute'
+  selectedMethod === 'billie' ? '' : 'opacity-0 pointer-events-none absolute'
 )
 
 let stripe: any = null
@@ -25,6 +26,7 @@ let paymentElement: any = null
 let addressElement: any = null
 
 let isLoading = $state(false)
+let isInitializing = $state(false)
 let error = $state('')
 let clientSecret = $state('')
 let orderId = $state('')
@@ -43,15 +45,18 @@ let {
 
 // Event handlers for customization
 export function handleFormSubmit() {
-  dispatch('submit', { planId, totalAmount, couponCode, selectedPaymentMethod })
+  dispatch('submit', { planId, totalAmount, couponCode, selectedMethod })
 }
 
-export function handleTabChange(paymentMethod: string) {
-  selectedPaymentMethod = paymentMethod
-  dispatch('tabChange', { paymentMethod })
+export function handleSelectionChange(method: string) {
+  selectedMethod = method
+  error = ''
+  initializePayment(method)
+  dispatch('selectionChange', { method })
 }
 
 async function initializePayment(paymentMethod: string) {
+  isInitializing = true
   if (!stripe) {
     stripe = await loadStripe(PUBLIC_STRIPE_PUBLISHABLE_KEY)
   }
@@ -65,9 +70,19 @@ async function initializePayment(paymentMethod: string) {
       },
       body: JSON.stringify({
         plan_id: planId,
-        total_amount: totalAmount,
         couponCode: couponCode || undefined,
         payment_method_type: paymentMethod,
+        items: [
+          { name: 'Premium Subscription', quantity: 1, price: 9.99 },
+          { name: 'Setup Fee', quantity: 1, price: 0.01 },
+        ],
+        deliveryAddress: {
+          qrno: 'DUMMY_QR_123',
+          address: '123 Dummy Street',
+          city: 'Dummy City',
+          state: 'Dummy State',
+          zip: '12345',
+        },
       }),
     })
 
@@ -89,6 +104,10 @@ async function initializePayment(paymentMethod: string) {
       clientSecret,
       appearance: {
         theme: 'stripe',
+        layout: {
+          type: 'accordion',
+          defaultCollapsed: false,
+        },
       },
     })
 
@@ -121,10 +140,14 @@ async function initializePayment(paymentMethod: string) {
       addressElement.mount('#address-element')
     }
   } catch (err) {
-    error = 'Failed to initialize payment'
+    error = err.message || 'Failed to initialize payment'
     console.error(err)
+  } finally {
+    isInitializing = false
   }
 }
+
+let initialized = false
 
 onMount(async () => {
   const urlParams = new URLSearchParams(window.location.search)
@@ -132,7 +155,15 @@ onMount(async () => {
   totalAmount = parseFloat(urlParams.get('total_amount') || '0')
   couponCode = urlParams.get('coupon') || ''
 
-  await initializePayment(selectedPaymentMethod)
+  await initializePayment(selectedMethod || 'card')
+  initialized = true
+})
+
+$effect(() => {
+  if (initialized) {
+    initializePayment(selectedMethod)
+    dispatch('selectionChange', { method: selectedMethod })
+  }
 })
 
 async function handleSubmit() {
@@ -162,7 +193,8 @@ async function handleSubmit() {
     if (confirmError) {
       // Handle different types of errors
       if (confirmError.type === 'card_error') {
-        error = confirmError.message || 'Your card was declined. Please try a different payment method.'
+        error =
+          confirmError.message || 'Your card was declined. Please try a different payment method.'
       } else if (confirmError.type === 'validation_error') {
         error = confirmError.message || 'Please check your payment information and try again.'
       } else if (confirmError.type === 'api_connection_error') {
@@ -219,7 +251,9 @@ async function confirmPaymentOnServer(paymentIntentId: string) {
       goto('/orders')
     } else if (result.requires_action) {
       // Handle additional authentication required
-      const { error: authError } = await stripe.confirmCardPayment(result.payment_intent_client_secret)
+      const { error: authError } = await stripe.confirmCardPayment(
+        result.payment_intent_client_secret
+      )
 
       if (authError) {
         error = authError.message || 'Authentication failed'
@@ -241,31 +275,59 @@ async function confirmPaymentOnServer(paymentIntentId: string) {
 }
 </script>
 
-<div class="max-w-md mx-auto p-6 bg-white rounded-lg shadow-md">
-  <h1 class="text-2xl font-bold mb-6">{title}</h1>
+<div class="w-full max-w-md mx-auto p-8 bg-white dark:bg-gray-900 text-gray-900 dark:text-white">
+  <div class="flex gap-3 mb-6">
+    <!-- Card Button -->
+    <button
+      onclick={() => handleSelectionChange('card')}
+      class={`flex items-center gap-3 px-6 py-4 rounded-xl border-2 transition-all ${
+        selectedMethod === 'card'
+          ? 'border-blue-600 bg-white dark:bg-gray-800'
+          : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 hover:border-gray-300 dark:hover:border-gray-500'
+      }`}
+    >
+      <div class="w-10 h-10 bg-slate-800 dark:bg-slate-700 rounded-lg flex items-center justify-center">
+        <CreditCard class="w-5 h-5 text-white" />
+      </div>
+      <span class="text-lg font-semibold text-slate-800 dark:text-slate-200">Card</span>
+    </button>
+
+    <!-- Billie Button -->
+    <button
+      onclick={() => handleSelectionChange('billie')}
+      class={`flex items-center gap-3 px-6 py-4 rounded-xl border-2 transition-all ${
+        selectedMethod === 'billie'
+          ? 'border-blue-600 bg-white dark:bg-gray-800'
+          : 'border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 hover:border-gray-300 dark:hover:border-gray-500'
+      }`}
+    >
+      <div class="w-10 h-10 bg-white dark:bg-gray-700 rounded-lg flex items-center justify-center border dark:border-gray-600">
+        <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" fill="#007bff"/>
+        </svg>
+      </div>
+      <span class="text-lg font-semibold text-slate-800 dark:text-slate-200">Billie</span>
+    </button>
+  </div>
 
   {#if error}
-    <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+    <div class="bg-red-100 dark:bg-red-900 border border-red-400 dark:border-red-600 text-red-700 dark:text-red-300 px-4 py-3 rounded mb-4">
       {error}
     </div>
   {/if}
 
-  {#if showTabs && paymentMethods.length > 1}
-    <div class="flex border-b mb-4">
-      {#each paymentMethods as method}
-        <button
-          class="px-4 py-2 text-sm font-medium {selectedPaymentMethod === method.id ? 'border-b-2 border-blue-500 text-blue-600' : 'text-gray-500'}"
-          onclick={() => { selectedPaymentMethod = method.id; initializePayment(method.id); handleTabChange(method.id); }}
-        >
-          {method.label}
-        </button>
-      {/each}
+  {#if isInitializing}
+    <div class="flex items-center justify-center py-8">
+      <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      <span class="ml-2 text-gray-600 dark:text-gray-400">Initializing payment...</span>
     </div>
   {/if}
 
   <!-- Stripe Elements -->
-  <div id="payment-element" class={paymentElementClass}></div>
-  <div id="address-element" class={addressElementClass}></div>
+  <div class="min-h-[200px]">
+    <div id="payment-element" class={paymentElementClass}></div>
+    <div id="address-element" class={addressElementClass}></div>
+  </div>
 
   {#if showSummary}
     <div class="bg-gray-50 p-4 rounded-md">

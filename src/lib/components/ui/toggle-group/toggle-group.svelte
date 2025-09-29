@@ -20,6 +20,7 @@ export function getToggleGroupCtx() {
 		class: className,
 		size = "default",
 		variant = "default",
+		type = "single",
 		...restProps
 	}: ToggleGroupPrimitive.RootProps & ToggleVariants = $props();
 
@@ -39,6 +40,7 @@ get along, so we shut typescript up by casting `value` to `never`.
 	data-slot="toggle-group"
 	data-variant={variant}
 	data-size={size}
+	{type}
 	class={cn(
 		"group/toggle-group data-[variant=outline]:shadow-xs flex w-fit items-center rounded-md",
 		className
