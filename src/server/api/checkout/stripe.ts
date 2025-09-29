@@ -81,7 +81,7 @@ stripeRoutes.post('/stripe-checkout', authenticate, async (c) => {
         .where(eq(Order.id, order.id))
 
       // Create PaymentIntent for subscription
-      const paymentIntent = await stripe.paymentIntents.create({
+      const paymentIntentData: any = {
         amount: Math.round(totalAmount * 100),
         currency: 'gbp',
         payment_method_types: payment_method_type === 'billie' ? ['card', 'billie'] : ['card'],
@@ -89,7 +89,29 @@ stripeRoutes.post('/stripe-checkout', authenticate, async (c) => {
           order_id: order.id,
           payment_id: paymentId,
         },
-      })
+      }
+
+      if (payment_method_type === 'billie') {
+        paymentIntentData.payment_method_options = {
+          billie: {
+            company_details: {
+              registered_name: 'Zeta Electronics Gold GmbH',
+              registration_number: 'HRB 934855',
+              registered_address: {
+                line1: 'Tannenweg 4',
+                city: 'Haslach im Kinzigtal',
+                postal_code: '77716',
+                country: 'DE',
+              },
+              vat: 'DE812345678',
+            },
+            reference: `ORDER-${order.orderNumber}`,
+            capture_method: 'manual',
+          },
+        }
+      }
+
+      const paymentIntent = await stripe.paymentIntents.create(paymentIntentData)
 
       // Update payment with payment reference
       await db

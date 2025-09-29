@@ -111,34 +111,19 @@ async function initializePayment(paymentMethod: string) {
       },
     })
 
-    // Clear previous elements
-    if (paymentElement) {
-      paymentElement.unmount()
-      paymentElement = null
-    }
+    // Clear previous elements if switching types
     if (addressElement) {
       addressElement.unmount()
       addressElement = null
     }
 
-    // Create appropriate element based on payment method
-    if (paymentMethod === 'card') {
+    // Create or reuse payment element
+    if (!paymentElement) {
       paymentElement = elements.create('payment')
       await tick()
       paymentElement.mount('#payment-element')
-    } else if (paymentMethod === 'billie') {
-      addressElement = elements.create('address', {
-        mode: 'billing',
-        allowedCountries: ['DE', 'AT', 'CH'],
-        defaultValues: {
-          address: {
-            country: 'DE',
-          },
-        },
-      })
-      await tick()
-      addressElement.mount('#address-element')
     }
+    // No need to remount for card/billie since both use payment element
   } catch (err) {
     error = err.message || 'Failed to initialize payment'
     console.error(err)
@@ -326,7 +311,6 @@ async function confirmPaymentOnServer(paymentIntentId: string) {
   <!-- Stripe Elements -->
   <div class="min-h-[200px]">
     <div id="payment-element" class={paymentElementClass}></div>
-    <div id="address-element" class={addressElementClass}></div>
   </div>
 
   {#if showSummary}
