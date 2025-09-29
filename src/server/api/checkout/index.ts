@@ -10,6 +10,7 @@ import { capturePhonepe } from './phonepe/capture'
 import { phonepeCheckout } from './phonepe/checkout'
 import { validateCoupon as validateCouponUtil } from './validate-coupon'
 import { authenticate } from '@/server/middlewares'
+import { sendOrderConfirmationSms, sendNewOrderNotificationSms } from '../../services/sms'
 
 // Create a checkout router
 export const checkoutRoutes = new Hono()
@@ -603,10 +604,16 @@ checkoutRoutes.post('/payment-success', async (c) => {
         where: eq(OrderItem.orderId, order.id),
       })
 
-      // Fetch host name
+      // Fetch host (seller) details
       const host = await db.query.User.findFirst({
         where: eq(User.id, updatedOrder?.hostId || ''),
-        columns: { name: true },
+        columns: { name: true, phone: true },
+      })
+
+      // Fetch customer details
+      const customer = await db.query.User.findFirst({
+        where: eq(User.id, updatedOrder?.userId || ''),
+        columns: { name: true, phone: true },
       })
 
       // Extract base order number - only split if there's a suffix (multiple vendors)
@@ -615,6 +622,31 @@ checkoutRoutes.post('/payment-success', async (c) => {
       const baseOrderNumber = hasSuffix
         ? orderNumber.split('-').slice(0, -1).join('-')
         : orderNumber
+
+      // Send SMS notifications
+      try {
+        // Send confirmation SMS to customer
+        if (customer?.phone) {
+          await sendOrderConfirmationSms({
+            phone: customer.phone,
+            orderNo: baseOrderNumber,
+            totalAmount: updatedOrder?.totalAmount || '0',
+          })
+        }
+
+        // Send new order notification SMS to seller
+        if (host?.phone) {
+          await sendNewOrderNotificationSms({
+            phone: host.phone,
+            orderNo: baseOrderNumber,
+            customerName: customer?.name || 'Customer',
+            totalAmount: updatedOrder?.totalAmount || '0',
+          })
+        }
+      } catch (smsError) {
+        console.error('Error sending SMS notifications:', smsError)
+        // Don't fail the payment success if SMS fails
+      }
 
       updatedOrders.push({
         orderId: updatedOrder?.id,
