@@ -1,5 +1,5 @@
 {
-  "name": "turso",
+  "name": "Misiki",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -60,6 +60,9 @@
     "vite-plugin-devtools-json": "^1.0.0"
   },
   "dependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/cli": "^7.4.3",
+    "@capacitor/core": "^7.4.3",
     "@faker-js/faker": "^10.0.0",
     "@hono/node-server": "^1.19.1",
     "@hono/zod-validator": "^0.7.2",
@@ -70,6 +73,7 @@
     "@oslojs/encoding": "^1.1.0",
     "@paralleldrive/cuid2": "^2.2.2",
     "@stripe/stripe-js": "^7.9.0",
+    "@sveltejs/adapter-static": "^3.0.9",
     "@types/xlsx": "^0.0.36",
     "axios": "^1.11.0",
     "crypto-js": "^4.2.0",

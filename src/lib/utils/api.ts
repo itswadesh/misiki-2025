@@ -8,7 +8,7 @@ const send = async ({ method, path, params, data, token, headers }: any) => {
     path.includes('.css')
   )
     return
-  const WWW_URL = import.meta.env.VITE_WWW_URL || 'http://172.146.46.123:7000'
+  const WWW_URL = import.meta.env.VITE_WWW_URL || 'https://misiki.in'
   let origin = WWW_URL
 
   if (headers && headers.get('cookie') && headers.get('cookie').includes('store')) {
@@ -31,15 +31,15 @@ const send = async ({ method, path, params, data, token, headers }: any) => {
     const contentType = data?.files && data?.files[0]?.type
     if (
       !(
-        contentType == 'image/jpeg' ||
-        contentType == 'image/gif' ||
-        contentType == 'image/png' ||
-        contentType == 'image/ico' ||
-        contentType == 'image/webp' ||
-        contentType == 'application/pdf' ||
-        contentType == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
-        contentType == 'application/msword' ||
-        contentType == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        contentType === 'image/jpeg' ||
+        contentType === 'image/gif' ||
+        contentType === 'image/png' ||
+        contentType === 'image/ico' ||
+        contentType === 'image/webp' ||
+        contentType === 'application/pdf' ||
+        contentType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+        contentType === 'application/msword' ||
+        contentType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
       )
     ) {
       opts.headers['Content-Type'] = 'application/json'
