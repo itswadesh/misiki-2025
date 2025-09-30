@@ -1,24 +1,19 @@
-import { mdsvex } from 'mdsvex'
-import adapter from '@sveltejs/adapter-static'
+import adapter from '@sveltejs/adapter-auto'
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte'
 
+/** @type {import('@sveltejs/kit').Config} */
 const config = {
-  preprocess: [vitePreprocess(), mdsvex()],
-  kit: {
-    adapter: adapter({
-      pages: 'build',
-      assets: 'build',
-      fallback: 'index.html',
-      precompress: false,
-      strict: false
-    }),
-    alias: {
+	preprocess: vitePreprocess(),
+
+	kit: {
+		adapter: adapter(),
+     alias: {
       '@/*': './src/*',
     },
-  },
-  vitePlugin: {
-    inspector: true,
-  },
+	},
+	vitePlugin: {
+		inspector: true
+	},
   compilerOptions: {
     runes: true,
     enableSourcemap: true,
